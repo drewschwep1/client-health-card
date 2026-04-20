@@ -1,2 +1,2 @@
-:HL["/client-health-card/_next/static/chunks/0.w8d5r4shxdy.css","style"]
-0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"/_not-found","param":null,"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}},"staleTime":300,"buildId":"Kd6m_YCsJQAYvdFZp1lDC"}
+:HL["/client-health-card/_next/static/chunks/0m6ewj.le-i8t.css","style"]
+0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"/_not-found","param":null,"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}},"staleTime":300,"buildId":"JtGyGvRCJxsHIm8i8QE2z"}
