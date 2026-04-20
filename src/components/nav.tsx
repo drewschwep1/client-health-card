@@ -5,7 +5,6 @@ import { usePathname } from 'next/navigation';
 
 const links = [
   { href: '/', label: 'Dashboard' },
-  { href: '/score', label: 'Score' },
   { href: '/clients', label: 'Clients' },
   { href: '/portfolio', label: 'Portfolio' },
   { href: '/rubric', label: 'Rubric' },
@@ -19,7 +18,7 @@ export function Nav() {
       <div className="max-w-7xl mx-auto px-6 flex items-center justify-between h-14">
         <div className="flex items-center gap-8">
           <Link href="/" className="font-mono text-sm font-semibold tracking-tight">
-            HEALTH CARD
+            ST HEALTH CARD
           </Link>
           <nav className="flex gap-1">
             {links.map(({ href, label }) => {

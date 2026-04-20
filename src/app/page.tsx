@@ -25,6 +25,7 @@ export default function Dashboard() {
     return { client, current, prior };
   });
 
+  // Scored clients sorted by risk (RED first), then unscored at the end
   const sorted = clientsWithScores.sort((a, b) => {
     const order = { RED: 0, YELLOW: 1, GREEN: 2 };
     const aRisk = a.current?.risk;
@@ -48,31 +49,24 @@ export default function Dashboard() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
           <p className="text-sm text-muted mt-1">
-            Week of {currentWeek} &middot; {scoredCount}/{CLIENTS.length} scored
+            Week of {currentWeek} &middot; {CLIENTS.length} clients
+            {scoredCount > 0 && <> &middot; {scoredCount} scored</>}
             {avgHealth !== null && <> &middot; Avg health: <span className="font-medium">{avgHealth}</span></>}
           </p>
         </div>
+        <span className="text-xs text-muted font-mono">Auto-scored from Fathom, Slack, email, Profound</span>
       </div>
 
-      {scoredCount === 0 ? (
-        <div className="border border-border rounded-lg p-12 text-center">
-          <p className="text-muted text-sm">No scores entered for this week yet.</p>
-          <a href="/score" className="inline-block mt-4 px-4 py-2 bg-foreground text-background rounded text-sm font-medium hover:opacity-90 transition-opacity">
-            Start scoring
-          </a>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {sorted.map(({ client, current, prior }) => (
-            <HealthTile
-              key={client.id}
-              client={client}
-              current={current}
-              prior={prior}
-            />
-          ))}
-        </div>
-      )}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {sorted.map(({ client, current, prior }) => (
+          <HealthTile
+            key={client.id}
+            client={client}
+            current={current}
+            prior={prior}
+          />
+        ))}
+      </div>
     </div>
   );
 }

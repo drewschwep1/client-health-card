@@ -8,7 +8,7 @@ export default function RubricPage() {
       <div className="mb-8">
         <h1 className="text-2xl font-semibold tracking-tight">Rubric</h1>
         <p className="text-sm text-muted mt-1">
-          Use this every scoring session. Scores only have value if everyone means the same thing by them.
+          All scores are computed algorithmically from data sources. No manual input. No subjectivity.
         </p>
       </div>
 
@@ -18,15 +18,15 @@ export default function RubricPage() {
             <div className="px-5 py-4 border-b border-border bg-background">
               <div className="flex items-center justify-between">
                 <h2 className="font-semibold">{dim.name}</h2>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs px-2 py-0.5 rounded bg-accent-light text-accent font-medium">
-                    {Math.round(dim.weight * 100)}%
-                  </span>
-                  <span className="text-xs text-muted">{dim.type}</span>
-                </div>
+                <span className="text-xs px-2 py-0.5 rounded bg-accent-light text-accent font-medium">
+                  {Math.round(dim.weight * 100)}% weight
+                </span>
               </div>
+              <p className="text-xs text-muted mt-2">
+                <span className="font-medium text-foreground">Signal:</span> {dim.signal}
+              </p>
               <p className="text-xs text-muted mt-1">
-                Source: {DATA_SOURCES[dim.id as DimensionId]}
+                <span className="font-medium text-foreground">Sources:</span> {DATA_SOURCES[dim.id as DimensionId]}
               </p>
             </div>
 
@@ -51,16 +51,16 @@ export default function RubricPage() {
       </div>
 
       <div className="mt-8 border border-border rounded-lg p-5 bg-card">
-        <h2 className="font-semibold mb-3">How the score works</h2>
+        <h2 className="font-semibold mb-3">Formula</h2>
         <div className="text-sm text-muted space-y-2">
-          <p>Each dimension is scored 1-5. The weighted formula produces a 0-100 health score:</p>
+          <p>Each dimension is scored 1-5 by aggregating signals from connected data sources. The weighted formula produces a 0-100 health score:</p>
           <p className="font-mono text-xs bg-background px-3 py-2 rounded">
             Health = (Happiness&times;0.25 + Results&times;0.30 + Execution&times;0.20 + Capacity&times;0.10 + Momentum&times;0.15) / 5 &times; 100
           </p>
           <div className="flex gap-6 mt-3">
             <span className="flex items-center gap-2">
               <span className="w-3 h-3 rounded bg-green" />
-              <span className="text-xs">80+ GREEN</span>
+              <span className="text-xs">80-100 GREEN</span>
             </span>
             <span className="flex items-center gap-2">
               <span className="w-3 h-3 rounded bg-yellow" />

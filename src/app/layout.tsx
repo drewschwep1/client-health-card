@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Client Health Card",
-  description: "Weekly client health tracking for SearchTides",
+  title: "ST Health Card",
+  description: "Automated client health scoring for SearchTides",
 };
 
 export default function RootLayout({
