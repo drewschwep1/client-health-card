@@ -1,47 +1,91 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { startOfWeek, subWeeks, format } from 'date-fns';
 import { CLIENTS } from '@/lib/constants';
-import { getAllScores, getCurrentWeekStart, WeeklyScore } from '@/lib/store';
+import type { HealthCardEntry } from '@/lib/manifest';
 import { HealthTile } from '@/components/health-tile';
+import { StatusLegend } from '@/components/status-legend';
+
+interface Manifest {
+  generatedAt: string;
+  clients: Record<string, Record<string, HealthCardEntry>>;
+}
 
 export default function Dashboard() {
-  const [scores, setScores] = useState<WeeklyScore[]>([]);
+  const [manifest, setManifest] = useState<Manifest | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    setScores(getAllScores());
-    setLoaded(true);
+    fetch('/client-health-card/data/fathom/signals.json')
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => setManifest(data))
+      .catch(() => setManifest(null))
+      .finally(() => setLoaded(true));
   }, []);
 
-  const currentWeek = getCurrentWeekStart();
-  const currentScores = scores.filter(s => s.weekStart === currentWeek);
-  const priorScores = scores.filter(s => s.weekStart !== currentWeek)
-    .sort((a, b) => b.weekStart.localeCompare(a.weekStart));
+  const { rows, currentWeek, priorWeek, scoredCount, avgHealth } = useMemo(() => {
+    if (!manifest) {
+      return { rows: [], currentWeek: null, priorWeek: null, scoredCount: 0, avgHealth: null };
+    }
 
-  const clientsWithScores = CLIENTS.map(client => {
-    const current = currentScores.find(s => s.clientId === client.id);
-    const prior = priorScores.find(s => s.clientId === client.id);
-    return { client, current, prior };
-  });
+    // Anchor "current week" to the last complete Monday (lagged by 1 week).
+    // Profound lags the in-progress week, so this alignment lets every
+    // client's tile show the same week with maximum data coverage.
+    const lastComplete = format(
+      startOfWeek(subWeeks(new Date(), 1), { weekStartsOn: 1 }),
+      'yyyy-MM-dd'
+    );
+    const priorComplete = format(
+      startOfWeek(subWeeks(new Date(), 2), { weekStartsOn: 1 }),
+      'yyyy-MM-dd'
+    );
+    const currentWeek = lastComplete;
+    const priorWeek = priorComplete;
 
-  // Scored clients sorted by risk (RED first), then unscored at the end
-  const sorted = clientsWithScores.sort((a, b) => {
-    const order = { RED: 0, YELLOW: 1, GREEN: 2 };
-    const aRisk = a.current?.risk;
-    const bRisk = b.current?.risk;
-    if (!aRisk && !bRisk) return 0;
-    if (!aRisk) return 1;
-    if (!bRisk) return -1;
-    return order[aRisk] - order[bRisk];
-  });
+    const rows = CLIENTS.map(client => {
+      const perWeek = manifest.clients[client.id] ?? {};
+      const current = currentWeek ? perWeek[currentWeek] ?? null : null;
+      const prior = priorWeek ? perWeek[priorWeek] ?? null : null;
+      return { client, current, prior };
+    });
 
-  const scoredCount = currentScores.length;
-  const avgHealth = scoredCount > 0
-    ? Math.round(currentScores.reduce((s, c) => s + c.health, 0) / scoredCount)
-    : null;
+    // Sort: scored first (RED > YELLOW > GREEN > unscored)
+    rows.sort((a, b) => {
+      const ah = a.current?.partialHealth ?? null;
+      const bh = b.current?.partialHealth ?? null;
+      if (ah === null && bh === null) return 0;
+      if (ah === null) return 1;
+      if (bh === null) return -1;
+      return ah - bh; // lower health first
+    });
 
-  if (!loaded) return <div className="text-muted text-sm">Loading...</div>;
+    const healths = rows
+      .map(r => r.current?.partialHealth)
+      .filter((h): h is number => typeof h === 'number');
+    const scoredCount = healths.length;
+    const avgHealth = scoredCount
+      ? Math.round(healths.reduce((a, b) => a + b, 0) / scoredCount)
+      : null;
+
+    return { rows, currentWeek, priorWeek, scoredCount, avgHealth };
+  }, [manifest]);
+
+  if (!loaded) return <div className="text-muted text-sm">Loading…</div>;
+
+  if (!manifest) {
+    return (
+      <div className="border border-border rounded-lg p-8 text-center">
+        <p className="text-sm text-muted">
+          No signals manifest found. Run{' '}
+          <code className="font-mono text-xs bg-background px-1.5 py-0.5 rounded">
+            npm run fathom:sync
+          </code>{' '}
+          to generate one.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -49,24 +93,35 @@ export default function Dashboard() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
           <p className="text-sm text-muted mt-1">
-            Week of {currentWeek} &middot; {CLIENTS.length} clients
-            {scoredCount > 0 && <> &middot; {scoredCount} scored</>}
-            {avgHealth !== null && <> &middot; Avg health: <span className="font-medium">{avgHealth}</span></>}
+            Week of {currentWeek ?? '—'} · {CLIENTS.length} clients
+            {scoredCount > 0 && <> · {scoredCount} scored</>}
+            {avgHealth !== null && (
+              <>
+                {' '}
+                · Avg partial health: <span className="font-medium">{avgHealth}</span>
+              </>
+            )}
           </p>
         </div>
-        <span className="text-xs text-muted font-mono">Auto-scored from Fathom, Slack, email, Profound</span>
+        <span className="text-xs text-muted font-mono">
+          Fathom + Profound · Capacity Fit pending
+        </span>
       </div>
 
+      <StatusLegend />
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {sorted.map(({ client, current, prior }) => (
-          <HealthTile
-            key={client.id}
-            client={client}
-            current={current}
-            prior={prior}
-          />
+        {rows.map(({ client, current, prior }) => (
+          <HealthTile key={client.id} client={client} current={current} prior={prior} />
         ))}
       </div>
+
+      <p className="text-[11px] text-muted mt-8 max-w-2xl">
+        Partial health uses 4 automated dimensions: Client Happiness, Execution Discipline, and
+        Internal Momentum (Fathom transcripts), plus Results Delivered (Profound: share of voice,
+        citation share, visibility, sentiment). Weights are renormalized across covered
+        dimensions. Capacity Fit (needs time-tracking + MRR) is still pending.
+      </p>
     </div>
   );
 }

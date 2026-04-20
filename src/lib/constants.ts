@@ -13,6 +13,7 @@ export const CLIENTS = [
   { id: 'risepoint', name: 'Risepoint', vertical: 'Higher ed (fmr Acad. Partners)', icpFit: 'N' },
   { id: 'pali-adventures', name: 'Pali Adventures', vertical: 'Youth / camp', icpFit: 'N' },
   { id: 'veep', name: 'Veep', vertical: 'Fintech', icpFit: 'Y' },
+  { id: 'searchtides', name: 'SearchTides', vertical: 'Internal — SearchTides own AI visibility / SEO', icpFit: 'Y' },
 ] as const;
 
 export type ClientId = typeof CLIENTS[number]['id'];
@@ -111,10 +112,77 @@ export function getRiskColor(health: number): 'GREEN' | 'YELLOW' | 'RED' {
   return 'RED';
 }
 
+export type HealthStatus = 'GREEN' | 'YELLOW' | 'RED' | 'BLUE' | 'EMPTY';
+
+// Derive the full health status label with coverage awareness.
+// BLUE = "partial data — can't score yet" (< 3 of 5 dims covered).
+// EMPTY = no data at all this week.
+export function getHealthStatus(
+  health: number | null,
+  coveredDims: number
+): HealthStatus {
+  if (health === null) return 'EMPTY';
+  if (coveredDims < 3) return 'BLUE';
+  return getRiskColor(health);
+}
+
+// Human-readable meaning of each status — shown in the legend on the
+// Dashboard so viewers don't read YELLOW as "bad" when it means "on track."
+export const STATUS_MEANING: Record<HealthStatus, { label: string; description: string }> = {
+  GREEN: { label: 'Healthy', description: 'Performing at or above expectations — 80+ partial health.' },
+  YELLOW: { label: 'On Track', description: 'Meeting baseline, not ahead. This is fine — 60–79 partial health.' },
+  RED: { label: 'Needs Attention', description: 'One or more dimensions flagged — below 60 partial health.' },
+  BLUE: { label: 'Partial Data', description: 'Fewer than 3 of 5 dimensions scored — insufficient signal to judge.' },
+  EMPTY: { label: 'No Data', description: 'No Fathom calls, Profound data, or other signal this week.' },
+};
+
+// Per-client metadata (QBR cadence, contract dates, MRR).
+// Values populated by Drew. Unknown fields stay empty — they'll show as
+// "—" in the UI rather than triggering a null-check failure.
+export interface ClientMetadata {
+  contractStart?: string; // ISO date
+  contractEnd?: string; // ISO date, null = month-to-month
+  monthlyValue?: number; // USD
+  lastQBR?: string; // ISO date
+  nextQBR?: string; // ISO date
+  pointOfContact?: { name?: string; email?: string; role?: string };
+  accountLead?: string; // SearchTides person
+  contractStatus?: 'active' | 'renewing' | 'at-risk' | 'offboarding';
+  notes?: string;
+}
+
+// Populate as data becomes available. Clients not in this map surface
+// their metadata as "—" in the Clients tab.
+export const CLIENT_METADATA: Partial<Record<ClientId, ClientMetadata>> = {
+  // Example (replace with real values):
+  // 'creditninja': {
+  //   contractStart: '2024-01-15',
+  //   monthlyValue: 25000,
+  //   lastQBR: '2026-01-20',
+  //   nextQBR: '2026-04-20',
+  //   pointOfContact: { name: 'Patrick Shipman', email: 'patrick@creditninja.com' },
+  //   accountLead: 'Derek Iwasiuk',
+  //   contractStatus: 'active',
+  // },
+};
+
 // Fathom team names whose meetings feed the scorecard. These are the exact
 // names returned by GET /teams on our Fathom org — "Client Service" (not
 // "Client Success") is intentional.
 export const FATHOM_TEAMS = ['Client Service', 'Customer Success'] as const;
+
+// SearchTides mailboxes the Gmail sync iterates (via service-account DWD).
+// If any address is wrong, DWD auth fails per-mailbox and the sync logs a
+// "USER_NOT_FOUND" or "delegation denied" error — update this list then.
+export const SEARCHTIDES_MAILBOXES = [
+  'drew@searchtides.com',
+  'casey@searchtides.com',
+  'keegan@searchtides.com',
+  'nicholas@searchtides.com',
+  'sofiavolynets@searchtides.com',
+  'baldwin@searchtides.com',
+  'derek.iwasiuk@searchtides.com',
+] as const;
 
 // Maps a Fathom meeting to a client via attendee email domain. Add entries
 // as new domains appear in unmatched meetings — the poller writes those to
@@ -141,3 +209,101 @@ export const DOMAIN_TO_CLIENT: Record<string, ClientId> = Object.entries(
   for (const d of domains ?? []) acc[d.toLowerCase()] = clientId as ClientId;
   return acc;
 }, {} as Record<string, ClientId>);
+
+// Explicit Slack channel-name → client map. Used by the Slack sync to attribute
+// channel-week extractions when member-email heuristics don't resolve
+// cleanly (e.g., Slack Connect channels where client users use a guest
+// email domain). Names are matched case-insensitive on the exact channel
+// name (no `#` prefix). Leave empty to rely fully on heuristic matching.
+export const CLIENT_SLACK_CHANNELS: Partial<Record<ClientId, readonly string[]>> = {
+  'creditninja': ['creditninja'],
+  'ninjacard': ['ninjacard'],
+  'fanduel-sportsbook': ['fd-sportsbook'],
+  'fanduel-casino': ['fd-casino'],
+  'cd-valet': ['cdvalet'],
+  'melin': ['melin'],
+  'incode': ['incode'],
+  'greenvelope': ['greenvelope'],
+  'klass-wagen': ['klass-wagen'],
+  'veep': ['veep'],
+  'mighty-capital': ['mighty-capital'],
+  'risepoint': ['academic-partnerships'],
+};
+
+// Profound "asset" (brand) IDs per client. Clients absent from this map are
+// skipped by the Profound sync — Results Delivered stays pending until another
+// data source (GSC/Ahrefs/etc.) covers them.
+// Source: `GET /v1/org/assets?limit=500` filtered by `is_owned: true` on 2026-04-20.
+export interface ProfoundAssetMapping {
+  assetId: string;
+  assetName: string; // exact string from Profound — used in filter (only accepts asset_name, not asset_id)
+  assetWebsite: string; // hostname Profound reports citations against
+  categoryId: string;
+  categoryName: string;
+}
+
+export const CLIENT_PROFOUND_ASSET: Partial<Record<ClientId, ProfoundAssetMapping>> = {
+  'creditninja': {
+    assetId: '055c74c4-57eb-4b93-97a7-228f3814dee1',
+    assetName: 'CreditNinja',
+    assetWebsite: 'creditninja.com',
+    categoryId: '19c952d6-ad78-484b-aabb-7a7d727c284f',
+    categoryName: 'FinTech',
+  },
+  'incode': {
+    assetId: '21e0019a-2711-44a3-9781-d243e51c08d8',
+    assetName: 'Incode',
+    assetWebsite: 'incode.com',
+    categoryId: '3c8ee32e-14cc-4de2-8ea3-8300eb21463b',
+    categoryName: 'Digital identity verification',
+  },
+  'cd-valet': {
+    assetId: 'a62e547e-c92f-4bb8-bc66-afae175fe3b3',
+    assetName: 'CD Valet',
+    assetWebsite: 'cdvalet.com',
+    categoryId: '89c9b9a7-b76d-4eba-ac8a-843cfeb95c1a',
+    categoryName: 'Certificate of Deposit',
+  },
+  'greenvelope': {
+    assetId: '132e9177-6b6f-48a6-b771-983634b01013',
+    assetName: 'Greenvelope',
+    assetWebsite: 'greenvelope.com',
+    categoryId: '9a697758-c84c-43d6-8e0d-f04b85145661',
+    categoryName: 'Digital invitations',
+  },
+  'melin': {
+    assetId: '2bbfe51d-3e29-41db-911c-c0fa91464532',
+    assetName: 'Melin',
+    assetWebsite: 'melin.com',
+    categoryId: '9cfc7908-3268-4158-9957-2374ec877c93',
+    categoryName: 'Headwear',
+  },
+  'klass-wagen': {
+    assetId: 'ca4c5afb-5924-47bd-930b-6f25068c13ec',
+    assetName: 'Klass Wagen',
+    assetWebsite: 'klasswagen.com',
+    categoryId: '9ef203d9-9919-4a8a-bb8d-7d851e68bc3d',
+    categoryName: 'Car Rentals',
+  },
+  'mighty-capital': {
+    assetId: '865f4d0c-bd03-4291-8979-1a8a2ee0ec1b',
+    assetName: 'Mighty Capital',
+    assetWebsite: 'mighty.capital',
+    categoryId: '9f1a1e1a-e9e6-4675-86aa-a6191bf763c2',
+    categoryName: 'Venture Capital',
+  },
+  'fanduel-sportsbook': {
+    assetId: '65d2da87-efc2-46b4-8948-f97b80e269f0',
+    assetName: 'FanDuel',
+    assetWebsite: 'fanduel.com',
+    categoryId: '9ff0dd8c-c312-43ee-8dfb-9a36ffe344b5',
+    categoryName: 'Online Sports Betting',
+  },
+  'fanduel-casino': {
+    assetId: '65d2da87-efc2-46b4-8948-f97b80e269f0',
+    assetName: 'FanDuel',
+    assetWebsite: 'fanduel.com',
+    categoryId: '9ff0dd8c-c312-43ee-8dfb-9a36ffe344b5',
+    categoryName: 'Online Sports Betting',
+  },
+};

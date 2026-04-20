@@ -9,6 +9,13 @@ const MEETINGS_DIR = path.join(DATA_ROOT, 'meetings');
 const EXTRACTIONS_DIR = path.join(DATA_ROOT, 'extractions');
 const STATE_FILE = path.join(DATA_ROOT, 'state.json');
 
+// Gmail extractions live here (mirrors data/fathom/extractions/) and are
+// merged into listAllExtractions so the rollup is source-agnostic.
+const GMAIL_EXTRACTIONS_DIR = path.join(process.cwd(), 'data', 'gmail', 'extractions');
+
+// Slack extractions — one per (channel, week) — land here.
+const SLACK_EXTRACTIONS_DIR = path.join(process.cwd(), 'data', 'slack', 'extractions');
+
 export interface StoredMeeting {
   meeting: FathomMeeting;
   transcript: string; // flattened plain-text for LLM input
@@ -87,18 +94,27 @@ export async function listStoredMeetingKeys(): Promise<Set<string>> {
 }
 
 export async function listAllExtractions(): Promise<Extraction[]> {
-  try {
-    const files = await fs.readdir(EXTRACTIONS_DIR);
-    const out: Extraction[] = [];
-    for (const f of files) {
-      if (!f.endsWith('.json')) continue;
-      const raw = await fs.readFile(path.join(EXTRACTIONS_DIR, f), 'utf-8');
-      out.push(JSON.parse(raw) as Extraction);
+  const out: Extraction[] = [];
+  const dirs: Array<[string, 'fathom' | 'gmail' | 'slack']> = [
+    [EXTRACTIONS_DIR, 'fathom'],
+    [GMAIL_EXTRACTIONS_DIR, 'gmail'],
+    [SLACK_EXTRACTIONS_DIR, 'slack'],
+  ];
+  for (const [dir, defaultSource] of dirs) {
+    try {
+      const files = await fs.readdir(dir);
+      for (const f of files) {
+        if (!f.endsWith('.json')) continue;
+        const raw = await fs.readFile(path.join(dir, f), 'utf-8');
+        const parsed = JSON.parse(raw) as Extraction;
+        if (!parsed.source) parsed.source = defaultSource;
+        out.push(parsed);
+      }
+    } catch {
+      // Dir doesn't exist yet (e.g. no Gmail sync has run). Skip.
     }
-    return out;
-  } catch {
-    return [];
   }
+  return out;
 }
 
 export async function loadState(): Promise<SyncState> {

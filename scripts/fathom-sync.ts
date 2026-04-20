@@ -6,7 +6,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { CLIENTS, FATHOM_TEAMS, type ClientId } from '../src/lib/constants';
+import { FATHOM_TEAMS } from '../src/lib/constants';
 import { getSummary, getTranscript, listMeetings } from '../src/lib/fathom/client';
 import {
   listStoredMeetingKeys,
@@ -18,12 +18,9 @@ import {
 } from '../src/lib/fathom/store';
 import { extractFromMeeting } from '../src/lib/fathom/extract';
 import type { FathomTranscriptLine } from '../src/lib/fathom/types';
-import { getClientSignals } from '../src/lib/fathom/rollup';
 import { shouldExcludeMeeting } from '../src/lib/fathom/filter';
 import { loadMeeting, listAllExtractions } from '../src/lib/fathom/store';
-import { startOfWeek, format, subWeeks } from 'date-fns';
-
-const PUBLIC_MANIFEST = path.join(process.cwd(), 'public', 'data', 'fathom', 'signals.json');
+import { writeManifest as writeSharedManifest } from '../src/lib/manifest';
 
 function flattenTranscript(lines: FathomTranscriptLine[]): string {
   return lines
@@ -35,10 +32,6 @@ function isoDaysAgo(days: number): string {
   const d = new Date();
   d.setDate(d.getDate() - days);
   return d.toISOString();
-}
-
-function weekIso(date: Date): string {
-  return format(startOfWeek(date, { weekStartsOn: 1 }), 'yyyy-MM-dd');
 }
 
 async function ingest(): Promise<{ ingested: number; extracted: number; errors: string[] }> {
@@ -117,9 +110,10 @@ async function buildExcludedRecordingIds(): Promise<Set<number>> {
   // without re-extracting transcripts. Already-extracted meetings that now
   // match the filter just get dropped from the manifest.
   const all = await listAllExtractions();
+  const fathomOnly = all.filter(e => (e.source ?? 'fathom') === 'fathom');
   const excluded = new Set<number>();
   let checked = 0;
-  for (const e of all) {
+  for (const e of fathomOnly) {
     checked++;
     const stored = await loadMeeting(e.recordingId);
     if (!stored) continue;
@@ -133,34 +127,50 @@ async function buildExcludedRecordingIds(): Promise<Set<number>> {
 }
 
 async function writeManifest(): Promise<void> {
-  // Roll up the last 8 weeks per client — plenty of history for the UI,
-  // small enough to ship as a static JSON.
-  const weeks = Array.from({ length: 8 }, (_, i) => weekIso(subWeeks(new Date(), i)));
   const excluded = await buildExcludedRecordingIds();
-  const manifest: {
-    generatedAt: string;
-    clients: Record<string, Record<string, unknown>>;
-  } = {
-    generatedAt: new Date().toISOString(),
-    clients: {},
-  };
+  const { clientsWithData, path: manifestPath } = await writeSharedManifest({
+    excludeRecordingIds: excluded,
+  });
+  console.log(`\nmanifest: ${manifestPath}  (${clientsWithData} clients with data)`);
+}
 
-  for (const c of CLIENTS) {
-    const perWeek: Record<string, unknown> = {};
-    for (const week of weeks) {
-      const signals = await getClientSignals(c.id as ClientId, week, {
-        excludeRecordingIds: excluded,
-      });
-      if (signals.meetingCount > 0) perWeek[week] = signals;
+async function reExtractStored(): Promise<{ done: number; errors: string[] }> {
+  // Re-run Claude extraction on every already-stored meeting. Used when the
+  // extraction schema or prompt changes — skips the Fathom fetch, just
+  // re-runs the LLM against the local transcript. Filtered (1:1) meetings
+  // still get their files regenerated; the manifest-time filter drops them
+  // from the final rollup either way.
+  const files = await fs.readdir(path.join(process.cwd(), 'data', 'fathom', 'meetings'));
+  const meetingFiles = files.filter(f => f.endsWith('.json'));
+  console.log(`\n== re-extraction: ${meetingFiles.length} stored meetings ==`);
+
+  let done = 0;
+  const errors: string[] = [];
+
+  for (const f of meetingFiles) {
+    const rid = Number(f.replace('.json', ''));
+    const stored = await loadMeeting(rid);
+    if (!stored) continue;
+
+    try {
+      const extraction = await extractFromMeeting(stored);
+      await saveExtraction(rid, extraction);
+      done++;
+
+      const s = extraction.scores;
+      console.log(
+        `  [${done}/${meetingFiles.length}] rid=${rid} client=${extraction.clientId ?? '(none)'} ` +
+          `CH=${s['client-happiness'] ?? '-'} ED=${s['execution-discipline'] ?? '-'} IM=${s['internal-momentum'] ?? '-'} ` +
+          `· ${stored.meeting.title.slice(0, 40)}`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`rid ${rid}: ${msg}`);
+      console.error(`  rid=${rid} ERROR: ${msg}`);
     }
-    if (Object.keys(perWeek).length > 0) manifest.clients[c.id] = perWeek;
   }
 
-  await fs.mkdir(path.dirname(PUBLIC_MANIFEST), { recursive: true });
-  await fs.writeFile(PUBLIC_MANIFEST, JSON.stringify(manifest, null, 2));
-  console.log(
-    `\nmanifest: ${PUBLIC_MANIFEST}  (${Object.keys(manifest.clients).length} clients with data)`
-  );
+  return { done, errors };
 }
 
 async function main(): Promise<void> {
@@ -173,19 +183,33 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  console.log('== Fathom sync ==');
+  const reExtract = process.argv.includes('--re-extract');
+  const manifestOnly = process.argv.includes('--manifest-only');
+
+  console.log(`== Fathom sync ${reExtract ? '(re-extract mode)' : manifestOnly ? '(manifest only)' : ''} ==`);
   const start = Date.now();
-  const { ingested, extracted, errors } = await ingest();
-  console.log(`\n== ingest done: ${ingested} new meetings, ${extracted} extracted, ${errors.length} errors ==`);
+  const allErrors: string[] = [];
+
+  if (reExtract) {
+    const { done, errors } = await reExtractStored();
+    console.log(`\n== re-extraction done: ${done} meetings, ${errors.length} errors ==`);
+    allErrors.push(...errors);
+  } else if (!manifestOnly) {
+    const { ingested, extracted, errors } = await ingest();
+    console.log(
+      `\n== ingest done: ${ingested} new meetings, ${extracted} extracted, ${errors.length} errors ==`
+    );
+    allErrors.push(...errors);
+  }
 
   console.log('\n== building manifest ==');
   await writeManifest();
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
   console.log(`\n✓ done in ${elapsed}s`);
-  if (errors.length) {
+  if (allErrors.length) {
     console.log('\nErrors:');
-    errors.forEach(e => console.log('  -', e));
+    allErrors.forEach(e => console.log('  -', e));
   }
 }
 

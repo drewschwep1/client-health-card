@@ -34,8 +34,17 @@ yarn-error.log*
 .env*
 !.env.local.example
 
+# Google service-account key — NEVER commit
+*service-account*.json
+gmail-service-account.json
+
 # fathom-sync artifacts (transcripts, extractions, poll state)
 /data
+
+# Client-confidential manifest — DO NOT commit while repo is PUBLIC.
+# Contains transcript quotes, sentiment, wins/concerns, Profound data.
+# Make repo private (or move hosting) before removing this line.
+/public/data
 
 # vercel
 .vercel

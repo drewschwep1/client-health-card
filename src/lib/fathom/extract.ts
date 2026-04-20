@@ -9,15 +9,24 @@ import {
   type DimensionId,
 } from '../constants';
 import type { StoredMeeting } from './store';
-import type { Extraction } from './extract-types';
+import type { Extraction, FathomScorableDimension, RubricScore } from './extract-types';
 
-const MODEL = 'claude-sonnet-4-6';
+export const MODEL = 'claude-sonnet-4-6';
+export const SCHEMA_VERSION = 2;
 
 const DIMENSION_IDS: DimensionId[] = DIMENSIONS.map(d => d.id);
 const CLIENT_IDS: ClientId[] = CLIENTS.map(c => c.id);
 
-// Tool schema — Claude returns structured data via a forced tool call.
-const extractionSchema = {
+// Claude returns 0-5 for each scorable dimension: 0 = no evidence in
+// transcript (honest pass), 1-5 = rubric score. 0 is normalized to null
+// after parsing.
+const scoreField = (dimensionLabel: string, rule: string) => ({
+  type: 'integer' as const,
+  enum: [0, 1, 2, 3, 4, 5],
+  description: `${dimensionLabel} — score per the rubric (1..5). Return 0 ONLY if the transcript offers no evidence either way; do not guess. ${rule}`,
+});
+
+export const extractionSchema = {
   type: 'object' as const,
   properties: {
     clientId: {
@@ -25,25 +34,31 @@ const extractionSchema = {
       enum: [...CLIENT_IDS, null],
       description: 'Which client this meeting is about, or null if unclear.',
     },
+    clientHappinessScore: scoreField(
+      'Client Happiness',
+      'Base on CLIENT tone, engagement, complaints, praise — not internal sentiment.'
+    ),
+    executionDisciplineScore: scoreField(
+      'Execution Discipline',
+      'Base on visible deliverable cadence, response-time references, whether the client is chasing us, proactive slip-flagging. No-ops/internal calls usually return 0.'
+    ),
+    internalMomentumScore: scoreField(
+      'Internal Momentum',
+      'Base on whether the team seems ahead/on-pace/behind on this account — unprompted strategic recommendations, energy, proactive ideas.'
+    ),
     weeklyWins: {
       type: 'array' as const,
       items: { type: 'string' as const },
       minItems: 0,
       maxItems: 6,
       description:
-        'Concrete wins or positive outcomes mentioned — budget approvals, KPI hits, client praise, scope expansions. Direct quotes preferred.',
-    },
-    clientHappinessScore: {
-      type: 'integer' as const,
-      enum: [1, 2, 3, 4, 5],
-      description:
-        'Score the client-happiness rubric (1 actively unhappy … 5 actively championing). Base ONLY on tone, engagement, complaints, praise in this transcript.',
+        'Concrete wins — budget approvals, KPI hits, client praise, scope expansions. Direct quotes preferred.',
     },
     proactivitySignals: {
       type: 'array' as const,
       items: { type: 'string' as const },
       description:
-        'Evidence we (SearchTides) are being proactive: unprompted recommendations, early deliverables, flagging risks before client notices.',
+        'Evidence of US (SearchTides) being proactive: unprompted recommendations, early deliverables, flagging risks before the client notices.',
     },
     concerns: {
       type: 'array' as const,
@@ -67,24 +82,31 @@ const extractionSchema = {
   },
   required: [
     'clientId',
-    'weeklyWins',
     'clientHappinessScore',
+    'executionDisciplineScore',
+    'internalMomentumScore',
+    'weeklyWins',
     'proactivitySignals',
     'concerns',
     'rawEvidence',
   ],
 };
 
-const extractionZod = z.object({
+const scoreZod = z.union([
+  z.literal(0),
+  z.literal(1),
+  z.literal(2),
+  z.literal(3),
+  z.literal(4),
+  z.literal(5),
+]);
+
+export const extractionZod = z.object({
   clientId: z.enum(CLIENT_IDS as [ClientId, ...ClientId[]]).nullable(),
+  clientHappinessScore: scoreZod,
+  executionDisciplineScore: scoreZod,
+  internalMomentumScore: scoreZod,
   weeklyWins: z.array(z.string()).max(6),
-  clientHappinessScore: z.union([
-    z.literal(1),
-    z.literal(2),
-    z.literal(3),
-    z.literal(4),
-    z.literal(5),
-  ]),
   proactivitySignals: z.array(z.string()),
   concerns: z.array(z.string()),
   rawEvidence: z
@@ -110,16 +132,13 @@ function domainMatch(meeting: StoredMeeting): ClientId | null {
 function titleMatch(meeting: StoredMeeting): ClientId | null {
   const title = (meeting.meeting.title ?? '').toLowerCase();
   for (const c of CLIENTS) {
-    // Require whole-word-ish match — guards against "edge" matching random mentions.
     const name = c.name.toLowerCase();
     if (title.includes(name)) return c.id;
   }
   return null;
 }
 
-// Static, cacheable block — rubric + clients list. Claude prompt-caches
-// this so subsequent extractions only pay for the transcript tokens.
-function buildStaticContext(): string {
+export function buildStaticContext(): string {
   const rubricLines: string[] = [];
   for (const dim of DIMENSIONS) {
     rubricLines.push(`### ${dim.name} (${dim.id}, weight ${dim.weight})`);
@@ -143,17 +162,23 @@ function buildStaticContext(): string {
   ].join('\n');
 }
 
-const SYSTEM_PROMPT = `You read SearchTides client-call transcripts from Fathom and extract structured signals for our weekly Client Health Card.
+const SYSTEM_PROMPT = `You read SearchTides client-call transcripts from Fathom and produce structured signals for our automated Client Health Card.
 
-Your output feeds a human scorecard — accuracy and direct evidence matter more than cleverness. When the transcript is thin, return fewer/shorter items; never fabricate wins or happiness.
+Output is consumed by software, not humans — accuracy and restraint matter more than completeness. If the transcript doesn't support a score, return 0 for that dimension. Never fabricate.
+
+Score three dimensions (client-happiness, execution-discipline, internal-momentum) per the rubric. Do NOT attempt to score results-delivered or capacity-fit — those come from GSC/Ahrefs/time-tracking, not transcripts.
 
 Rules:
-- weeklyWins: prefer paraphrased direct statements over editorial summaries. Budget approvals, KPI hits, client praise, scope expansions count. Internal SearchTides chit-chat does not.
-- clientHappinessScore: score the CLIENT's happiness with SearchTides, not overall call sentiment. If the transcript contains no client engagement signal, return 3.
-- proactivitySignals: evidence of US being proactive (unprompted recommendations, early deliverables, flagging risks). Client being proactive does not count.
-- concerns: anything that would make the scorer lower a dimension. Be specific — "client seemed tense at 12:03" is useful, "call had issues" is not.
+- weeklyWins: paraphrased client statements or meeting outcomes. Budget approvals, KPI hits, client praise, scope expansions count. Internal SearchTides discussion does NOT count.
+- proactivitySignals: evidence US (SearchTides) are being proactive. Client being proactive does NOT count.
+- concerns: specific risk flags. "Client tense at 12:03" is useful; "call had issues" is not.
 - rawEvidence: exact quotes, attributed to a speaker, tagged with the dimensionId they support.
-- clientId: pick from the active-clients list. If the meeting is clearly internal (no external client), or you cannot tell, return null.`;
+- clientId: pick from the active-clients list. Internal meetings (no external client) return null.
+- Score 0 on any dimension where the transcript genuinely gives no signal — especially common on internal meetings, short tactical calls, or AEO training sessions.`;
+
+export function normalizeScore(s: number): RubricScore | null {
+  return s === 0 ? null : (s as RubricScore);
+}
 
 export async function extractFromMeeting(meeting: StoredMeeting): Promise<Extraction> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -176,7 +201,9 @@ export async function extractFromMeeting(meeting: StoredMeeting): Promise<Extrac
     `- title: ${meeting.meeting.title}`,
     `- date: ${meeting.meeting.scheduled_start_time}`,
     `- invitees: ${invitees || '(none)'}`,
-    preMatched ? `- heuristic-matched client: ${preMatched} (via ${matchedVia})` : '- no heuristic client match',
+    preMatched
+      ? `- heuristic-matched client: ${preMatched} (via ${matchedVia})`
+      : '- no heuristic client match',
     '',
     `## Fathom auto-summary (markdown)`,
     meeting.summaryMarkdown || '(no summary available)',
@@ -220,17 +247,24 @@ export async function extractFromMeeting(meeting: StoredMeeting): Promise<Extrac
 
   const toolUse = response.content.find(b => b.type === 'tool_use');
   if (!toolUse || toolUse.type !== 'tool_use') {
-    throw new Error(`No tool_use in Claude response for recording ${meeting.meeting.recording_id}`);
+    throw new Error(
+      `No tool_use in Claude response for recording ${meeting.meeting.recording_id}`
+    );
   }
 
   const parsed = extractionZod.parse(toolUse.input);
 
-  // If the LLM picked a clientId and the heuristic didn't, that's an LLM match.
   const finalMatchedVia: Extraction['matchedVia'] = preMatched
     ? matchedVia
     : parsed.clientId
       ? 'llm'
       : 'none';
+
+  const scores: Partial<Record<FathomScorableDimension, RubricScore | null>> = {
+    'client-happiness': normalizeScore(parsed.clientHappinessScore),
+    'execution-discipline': normalizeScore(parsed.executionDisciplineScore),
+    'internal-momentum': normalizeScore(parsed.internalMomentumScore),
+  };
 
   return {
     recordingId: meeting.meeting.recording_id,
@@ -238,12 +272,13 @@ export async function extractFromMeeting(meeting: StoredMeeting): Promise<Extrac
     meetingDate: meeting.meeting.scheduled_start_time,
     clientId: preMatched ?? parsed.clientId,
     matchedVia: finalMatchedVia,
+    scores,
     weeklyWins: parsed.weeklyWins,
-    clientHappinessScore: parsed.clientHappinessScore,
     proactivitySignals: parsed.proactivitySignals,
     concerns: parsed.concerns,
     rawEvidence: parsed.rawEvidence,
     extractedAt: new Date().toISOString(),
     model: MODEL,
+    schemaVersion: SCHEMA_VERSION,
   };
 }
