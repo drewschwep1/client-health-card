@@ -5,6 +5,8 @@
 // extraction on client-domain threads and rebuilds the manifest at
 // public/data/fathom/signals.json.
 
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import {
   CLIENT_EMAIL_DOMAINS,
   SEARCHTIDES_MAILBOXES,
@@ -167,6 +169,40 @@ async function ingest(): Promise<{
   return totals;
 }
 
+async function reExtractStored(): Promise<{ done: number; errors: string[] }> {
+  // Re-run Claude extraction on every already-stored thread. Used when the
+  // extraction schema or prompt changes — skips the Gmail fetch, just
+  // re-runs the LLM against the stored thread.
+  const threadsDir = path.join(process.cwd(), 'data', 'gmail', 'threads');
+  let files: string[];
+  try {
+    files = (await fs.readdir(threadsDir)).filter(f => f.endsWith('.json'));
+  } catch {
+    return { done: 0, errors: ['no data/gmail/threads/ directory'] };
+  }
+  console.log(`\n== re-extraction: ${files.length} stored threads ==`);
+
+  let done = 0;
+  const errors: string[] = [];
+  for (const f of files) {
+    try {
+      const raw = await fs.readFile(path.join(threadsDir, f), 'utf-8');
+      const stored = JSON.parse(raw) as StoredThread;
+      const extraction = await extractFromThread(stored);
+      await saveExtraction(stored.thread.dedupKey, extraction);
+      done++;
+      console.log(
+        `  [${done}/${files.length}] ${stored.thread.subject.slice(0, 50)} · client=${extraction.clientId ?? '(none)'}`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`${f}: ${msg}`);
+      console.error(`  ${f} ERROR: ${msg}`);
+    }
+  }
+  return { done, errors };
+}
+
 async function main(): Promise<void> {
   if (!process.env.ANTHROPIC_API_KEY) {
     console.error('ANTHROPIC_API_KEY not set — check .env.local');
@@ -190,12 +226,17 @@ async function main(): Promise<void> {
   }
 
   const manifestOnly = process.argv.includes('--manifest-only');
+  const reExtract = process.argv.includes('--re-extract');
 
-  console.log(`== Gmail sync ${manifestOnly ? '(manifest only)' : ''} ==`);
+  console.log(`== Gmail sync ${reExtract ? '(re-extract mode)' : manifestOnly ? '(manifest only)' : ''} ==`);
   const start = Date.now();
   const allErrors: string[] = [];
 
-  if (!manifestOnly) {
+  if (reExtract) {
+    const { done, errors } = await reExtractStored();
+    console.log(`\n== re-extraction done: ${done} threads, ${errors.length} errors ==`);
+    allErrors.push(...errors);
+  } else if (!manifestOnly) {
     const { fetched, extracted, excluded, unmatched, errors } = await ingest();
     console.log(
       `\n== ingest done: ${fetched} threads, ${extracted} extracted, ${excluded} filtered, ${unmatched} unmatched, ${errors.length} errors ==`

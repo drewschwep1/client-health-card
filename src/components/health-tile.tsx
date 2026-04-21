@@ -112,10 +112,19 @@ export function HealthTile({ client, current, prior }: Props) {
             <ProfoundCallout current={current} />
           )}
 
-          {topWin && (
-            <p className="text-xs text-muted leading-relaxed line-clamp-2 mt-2">
-              &ldquo;{topWin}&rdquo;
-            </p>
+          {current.weekInATweet ? (
+            <div className="mt-3 pt-2 border-t border-border/60">
+              <p className="text-[10px] uppercase tracking-wide text-muted mb-1">
+                Week in a tweet
+              </p>
+              <p className="text-xs leading-relaxed">{current.weekInATweet}</p>
+            </div>
+          ) : (
+            topWin && (
+              <p className="text-xs text-muted leading-relaxed line-clamp-2 mt-2">
+                &ldquo;{topWin}&rdquo;
+              </p>
+            )
           )}
 
           <p className="text-[10px] text-muted mt-2">

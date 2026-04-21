@@ -1,8 +1,8 @@
 import { startOfWeek, format, parseISO, isWithinInterval, addDays } from 'date-fns';
 import { DIMENSIONS, type ClientId, type DimensionId } from '../constants';
 import { listAllExtractions } from './store';
-import type { Extraction, FathomScorableDimension } from './extract-types';
-import { FATHOM_SCORABLE_DIMENSIONS } from './extract-types';
+import type { Extraction, FathomScorableDimension, NarrativeItem } from './extract-types';
+import { FATHOM_SCORABLE_DIMENSIONS, resolveNarrativeItem } from './extract-types';
 
 export interface ClientSignals {
   clientId: ClientId;
@@ -46,6 +46,22 @@ function weekStartIso(date: Date): string {
   return format(startOfWeek(date, { weekStartsOn: 1 }), 'yyyy-MM-dd');
 }
 
+// Returns true if the extraction has ANY item (win/concern/proactivity/
+// rawEvidence) attributed — either via its primary clientId or a per-item
+// override — to the target clientId.
+function extractionTouchesClient(e: Extraction, clientId: ClientId): boolean {
+  if (e.clientId === clientId) return true;
+  const itemMatches = (item: string | NarrativeItem): boolean => {
+    if (typeof item === 'string') return false; // plain string inherits primary — already checked above
+    return item.clientId === clientId;
+  };
+  if (e.weeklyWins.some(itemMatches)) return true;
+  if (e.concerns.some(itemMatches)) return true;
+  if (e.proactivitySignals.some(itemMatches)) return true;
+  if (e.rawEvidence.some(r => r.clientId === clientId)) return true;
+  return false;
+}
+
 export async function getClientSignals(
   clientId: ClientId,
   weekStart?: string,
@@ -58,7 +74,7 @@ export async function getClientSignals(
 
   const all = await listAllExtractions();
   const relevant = all.filter(e => {
-    if (e.clientId !== clientId) return false;
+    if (!extractionTouchesClient(e, clientId)) return false;
     if (excluded.has(e.recordingId)) return false;
     try {
       return isWithinInterval(parseISO(e.meetingDate), {
@@ -104,6 +120,7 @@ function aggregate(
   const concerns = new Set<string>();
   const proactivity = new Set<string>();
   const rawEvidence: ClientSignals['rawEvidence'] = [];
+  const primaryExtractions: Extraction[] = []; // extractions whose primary client == clientId — drive meetingCount + scores
 
   const perDim: Record<FathomScorableDimension, Array<number | null>> = {
     'client-happiness': [],
@@ -112,14 +129,41 @@ function aggregate(
   };
 
   for (const e of extractions) {
-    e.weeklyWins.forEach(w => wins.add(w));
-    e.concerns.forEach(c => concerns.add(c));
-    e.proactivitySignals.forEach(p => proactivity.add(p));
-    for (const dim of FATHOM_SCORABLE_DIMENSIONS) {
-      perDim[dim].push(scoreFromExtraction(e, dim));
+    const isPrimary = e.clientId === clientId;
+    if (isPrimary) primaryExtractions.push(e);
+
+    // Pull items whose resolved client matches (per-item override wins over primary).
+    for (const w of e.weeklyWins) {
+      const resolved = resolveNarrativeItem(w, e.clientId);
+      if (resolved.clientId === clientId) wins.add(resolved.text);
+    }
+    for (const c of e.concerns) {
+      const resolved = resolveNarrativeItem(c, e.clientId);
+      if (resolved.clientId === clientId) concerns.add(resolved.text);
+    }
+    for (const p of e.proactivitySignals) {
+      const resolved = resolveNarrativeItem(p, e.clientId);
+      if (resolved.clientId === clientId) proactivity.add(resolved.text);
     }
     for (const r of e.rawEvidence) {
-      rawEvidence.push({ ...r, recordingId: e.recordingId });
+      const resolvedClient = r.clientId ?? e.clientId;
+      if (resolvedClient === clientId) {
+        rawEvidence.push({
+          dimensionId: r.dimensionId,
+          quote: r.quote,
+          speaker: r.speaker,
+          recordingId: e.recordingId,
+        });
+      }
+    }
+
+    // Scores + meetingCount only reflect the PRIMARY client's extractions —
+    // a concern routed here via per-item override does NOT imply a meeting
+    // happened for this client.
+    if (isPrimary) {
+      for (const dim of FATHOM_SCORABLE_DIMENSIONS) {
+        perDim[dim].push(scoreFromExtraction(e, dim));
+      }
     }
   }
 
@@ -157,8 +201,12 @@ function aggregate(
   return {
     clientId,
     weekStart,
-    meetingCount: extractions.length,
-    meetings: extractions.map(e => ({
+    // Count only touchpoints where this client is the PRIMARY subject —
+    // items routed here via per-item override (e.g., a Greenvelope concern
+    // surfaced inside a Mighty Capital meeting) don't count as
+    // "touchpoints" for this client, though their signals show through.
+    meetingCount: primaryExtractions.length,
+    meetings: primaryExtractions.map(e => ({
       recordingId: e.recordingId,
       title: e.meetingTitle,
       date: e.meetingDate,

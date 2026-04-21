@@ -6,6 +6,7 @@ import { CLIENTS, DIMENSIONS, type ClientId, type DimensionId } from './constant
 import { getClientSignals, type ClientSignals } from './fathom/rollup';
 import { getProfoundSignal, type ProfoundClientSignal } from './profound/rollup';
 import { FATHOM_SCORABLE_DIMENSIONS } from './fathom/extract-types';
+import { generateWeekInATweet } from './tweet';
 
 const PUBLIC_MANIFEST = path.join(process.cwd(), 'public', 'data', 'fathom', 'signals.json');
 
@@ -26,6 +27,9 @@ export type HealthCardEntry = Omit<ClientSignals, 'coveredDimensions' | 'partial
   // Overrides the narrower Fathom-only fields of ClientSignals.
   coveredDimensions: DimensionId[];
   partialHealth: number | null;
+  // One-sentence AI-generated summary of the week. null when there's no
+  // signal to summarize or Anthropic isn't configured.
+  weekInATweet: string | null;
 };
 
 function dimWeight(id: DimensionId): number {
@@ -96,12 +100,22 @@ export async function writeManifest(opts: {
         'internal-momentum': fathom.suggestedScores['internal-momentum'] ?? null,
         'results-delivered': profound?.rubricScore ?? null,
       };
+
+      const weekInATweet = await generateWeekInATweet(
+        c.id as ClientId,
+        week,
+        fathom,
+        profound,
+        combined.partialHealth
+      );
+
       perWeek[week] = {
         ...fathomRest,
         profound,
         dimScores,
         coveredDimensions: combined.coveredDimensions,
         partialHealth: combined.partialHealth,
+        weekInATweet,
       };
     }
     if (Object.keys(perWeek).length > 0) manifest.clients[c.id] = perWeek;

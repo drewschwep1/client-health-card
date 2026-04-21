@@ -62,13 +62,20 @@ const SYSTEM_PROMPT = `You read a week of SearchTides ↔ client Slack conversat
 
 Score three dimensions (client-happiness, execution-discipline, internal-momentum) per the rubric. Do NOT attempt to score results-delivered or capacity-fit.
 
-Rules specific to Slack:
+## Cross-client attribution (IMPORTANT)
+
+Each item in weeklyWins / concerns / proactivitySignals / rawEvidence has an optional \`clientId\` field. A single week in a channel can mention multiple clients — use \`clientId\` to route each item correctly:
+- Leave \`clientId\` null for items about the PRIMARY client of this channel-week.
+- Set \`clientId\` to a different client's ID when the item is genuinely about that client (e.g., an internal prep channel primarily discussing Mighty Capital where a Greenvelope issue surfaces — tag that concern \`clientId: "greenvelope"\`).
+
+## Rules specific to Slack
+
 - weeklyWins: concrete positive outcomes — client praise, approvals, KPI hits referenced in Slack, scope expansions. Internal-only cheer-leading does NOT count.
 - proactivitySignals: evidence of SearchTides being proactive — unprompted updates, flagging risks before the client asked, taking initiative.
 - concerns: risk flags — "any update?" / "still waiting on…" from the client, frustration, missed deadlines referenced, unresolved blockers.
-- rawEvidence: direct quotes (can be message fragments), attributed to the sending user's email (or @handle if email unknown), tagged with the dimensionId.
-- clientId: pick from the active-clients list. Primary path: match external (non-@searchtides.com) participants to the domain map. Secondary path (when the channel is internal-only and there's no domain signal): infer from message CONTENT — a client name mentioned repeatedly, a client domain referenced, a known project, the SearchTides "searchtides" meta-client for SearchTides' own AI visibility / SEO work. Return null if no single client dominates the week.
-- Slack conversation is often low-signal (one-liners, emoji reactions, logistics). Score 0 generously for weeks that are genuinely just coordination without happiness/discipline/momentum signal.`;
+- rawEvidence: direct quotes, attributed to the sending user's email (or @handle), tagged with the dimensionId.
+- clientId (top-level): pick PRIMARY client. Match external (non-@searchtides.com) participants to the domain map. If internal-only: infer from content — a client name mentioned repeatedly, a project, the \`searchtides\` meta-client for SearchTides' own AI visibility / SEO work. Return null if no single client dominates.
+- Slack is often low-signal (one-liners, emoji reactions, logistics). Score 0 generously.`;
 
 export async function extractFromChannelWeek(
   stored: StoredChannelWeek

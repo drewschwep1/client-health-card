@@ -45,16 +45,23 @@ function clientFromParticipants(thread: GmailThread): ClientId | null {
 
 const SYSTEM_PROMPT = `You read SearchTides ↔ client email threads and produce structured signals for our automated Client Health Card. Output is consumed by software, not humans — accuracy and restraint matter more than completeness. If the thread doesn't support a score, return 0 for that dimension. Never fabricate.
 
-Score three dimensions (client-happiness, execution-discipline, internal-momentum) per the rubric. Do NOT attempt to score results-delivered or capacity-fit — those come from GSC/Ahrefs/time-tracking.
+Score three dimensions (client-happiness, execution-discipline, internal-momentum) per the rubric. Do NOT attempt to score results-delivered or capacity-fit.
 
-Rules specific to email:
+## Cross-client attribution (IMPORTANT)
+
+Each item in weeklyWins / concerns / proactivitySignals / rawEvidence has an optional \`clientId\` field. Use it to route items to the CORRECT client:
+- Leave \`clientId\` null for items about the PRIMARY client of this thread.
+- Set \`clientId\` to a different client's ID when the item is genuinely about that client (e.g., a thread primarily with CreditNinja that mentions a concern about Greenvelope — tag that concern \`clientId: "greenvelope"\`).
+
+## Rules specific to email
+
 - weeklyWins: client statements of praise, budget approvals, KPI hits, scope expansions, positive outcomes. Internal SearchTides discussion does NOT count.
 - proactivitySignals: evidence US (SearchTides) are being proactive — unprompted recommendations, early deliverables, risks flagged to the client before they asked. Client-side proactivity does NOT count.
 - concerns: specific risk flags in the thread — frustrated tone, missed deadlines referenced, complaints, "circling back" or "any update?" type chase-ups from the client, unresolved blockers.
-- rawEvidence: exact quoted fragments (can be partial sentences), attributed to the sending email address, tagged with the dimensionId they support.
-- clientId: pick from the active-clients list by matching the non-SearchTides participants to the domain map. If the thread is fully internal or has no clear external client, return null.
-- execution-discipline in email context: heavy "any update?" / "circling back" from the client → lower; SearchTides replying quickly with concrete progress → higher. No-ops (logistics-only, single auto-reply) usually return 0.
-- Score 0 on any dimension the thread genuinely gives no signal for — especially common on logistics-only threads ("moving our 3pm to 4pm"), one-line confirmations, or calendar invites.`;
+- rawEvidence: exact quoted fragments, attributed to the sending email address, tagged with the dimensionId they support.
+- clientId (top-level): pick from the active-clients list by matching the non-SearchTides participants to the domain map. If the thread is fully internal or has no clear external client, return null.
+- execution-discipline in email context: heavy "any update?" / "circling back" from the client → lower; SearchTides replying quickly with concrete progress → higher. No-ops usually return 0.
+- Score 0 on any dimension the thread genuinely gives no signal for.`;
 
 export async function extractFromThread(stored: StoredThread): Promise<Extraction> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
