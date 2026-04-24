@@ -1,8 +1,76 @@
 import { startOfWeek, format, parseISO, isWithinInterval, addDays } from 'date-fns';
-import { DIMENSIONS, type ClientId, type DimensionId } from '../constants';
+import {
+  CLIENT_CONTACTS,
+  DIMENSIONS,
+  SEARCHTIDES_BUSINESS_BLOCKLIST,
+  TRANSCRIPT_NAME_FIXES,
+  type ClientId,
+  type DimensionId,
+} from '../constants';
 import { listAllExtractions } from './store';
 import type { Extraction, FathomScorableDimension, NarrativeItem } from './extract-types';
 import { FATHOM_SCORABLE_DIMENSIONS, resolveNarrativeItem } from './extract-types';
+
+// Apply Fathom transcript name corrections (e.g. "mossy" → "Massi").
+// Whole-word, case-insensitive; preserves capitalization of the replacement.
+const NAME_FIX_ENTRIES = Object.entries(TRANSCRIPT_NAME_FIXES);
+function applyNameFixes(text: string): string {
+  let out = text;
+  for (const [wrong, right] of NAME_FIX_ENTRIES) {
+    out = out.replace(new RegExp(`\\b${wrong}\\b`, 'gi'), right);
+  }
+  return out;
+}
+
+// Scan text for known client-contact first names. Returns the correct
+// clientId if exactly one contact matches, or null if zero or ambiguous.
+// Contacts with a last name require BOTH first+last to match (disambiguates
+// collisions like multiple "Patrick").
+const CONTACT_INDEX: Array<{ clientId: ClientId; firstName: string; lastName?: string }> =
+  Object.entries(CLIENT_CONTACTS).flatMap(([cid, contacts]) =>
+    (contacts ?? []).map(c => ({
+      clientId: cid as ClientId,
+      firstName: c.firstName,
+      lastName: c.lastName,
+    }))
+  );
+
+function reattributeByContact(text: string): ClientId | null {
+  const matches = new Set<ClientId>();
+  for (const c of CONTACT_INDEX) {
+    const firstRe = new RegExp(`\\b${c.firstName}\\b`, 'i');
+    if (!firstRe.test(text)) continue;
+    if (c.lastName) {
+      const lastRe = new RegExp(`\\b${c.lastName}\\b`, 'i');
+      if (!lastRe.test(text)) continue;
+    }
+    matches.add(c.clientId);
+  }
+  return matches.size === 1 ? [...matches][0] : null;
+}
+
+// Drop items whose text contains any SearchTides-business blocklist phrase.
+// Per Drew's rule: SearchTides' own revenue/break-even/hiring/finances must
+// never appear on any client tile.
+function containsSearchTidesBusiness(text: string): boolean {
+  const t = text.toLowerCase();
+  return SEARCHTIDES_BUSINESS_BLOCKLIST.some(phrase => t.includes(phrase.toLowerCase()));
+}
+
+// Full post-processing pipeline for a single narrative item: name-fix,
+// contact-based reattribution, biz-filter. Returns null if the item should
+// be dropped entirely (SearchTides-business content).
+function processNarrativeItem(
+  rawText: string,
+  primaryClientId: ClientId | null,
+  itemClientId: ClientId | null | undefined
+): { text: string; clientId: ClientId | null } | null {
+  const fixedText = applyNameFixes(rawText);
+  if (containsSearchTidesBusiness(fixedText)) return null;
+  const contactOverride = reattributeByContact(fixedText);
+  const resolvedClient = contactOverride ?? itemClientId ?? primaryClientId;
+  return { text: fixedText, clientId: resolvedClient };
+}
 
 export interface ClientSignals {
   clientId: ClientId;
@@ -132,18 +200,25 @@ function aggregate(
     const isPrimary = e.clientId === clientId;
     if (isPrimary) primaryExtractions.push(e);
 
-    // Pull items whose resolved client matches (per-item override wins over primary).
+    // Pull items whose resolved client matches. Pipeline applied per item:
+    //   1. Transcript name fixes (mossy → Massi, etc.)
+    //   2. Drop if item text contains SearchTides-business blocklist
+    //   3. Reattribute by known contact name if unambiguous (Sam → Greenvelope)
+    //   4. Otherwise fall back to the item's own clientId, then the primary clientId.
     for (const w of e.weeklyWins) {
       const resolved = resolveNarrativeItem(w, e.clientId);
-      if (resolved.clientId === clientId) wins.add(resolved.text);
+      const processed = processNarrativeItem(resolved.text, e.clientId, resolved.clientId);
+      if (processed && processed.clientId === clientId) wins.add(processed.text);
     }
     for (const c of e.concerns) {
       const resolved = resolveNarrativeItem(c, e.clientId);
-      if (resolved.clientId === clientId) concerns.add(resolved.text);
+      const processed = processNarrativeItem(resolved.text, e.clientId, resolved.clientId);
+      if (processed && processed.clientId === clientId) concerns.add(processed.text);
     }
     for (const p of e.proactivitySignals) {
       const resolved = resolveNarrativeItem(p, e.clientId);
-      if (resolved.clientId === clientId) proactivity.add(resolved.text);
+      const processed = processNarrativeItem(resolved.text, e.clientId, resolved.clientId);
+      if (processed && processed.clientId === clientId) proactivity.add(processed.text);
     }
     for (const r of e.rawEvidence) {
       const resolvedClient = r.clientId ?? e.clientId;

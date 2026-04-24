@@ -9,6 +9,9 @@
     "fathom:sync": "tsx --env-file=.env.local scripts/fathom-sync.ts",
     "gmail:auth": "tsx --env-file=.env.local scripts/gmail-auth.ts",
     "gmail:sync": "tsx --env-file=.env.local scripts/gmail-sync.ts",
+    "harvest:sync": "tsx --env-file=.env.local scripts/harvest-sync.ts",
+    "harvest:person-sync": "tsx --env-file=.env.local scripts/harvest-person-sync.ts",
+    "cost:report": "python3 scripts/cost_report.py",
     "profound:sync": "tsx --env-file=.env.local scripts/profound-sync.ts",
     "slack:sync": "tsx --env-file=.env.local scripts/slack-sync.ts"
   },

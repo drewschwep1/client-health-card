@@ -13,6 +13,7 @@ export const CLIENTS = [
   { id: 'risepoint', name: 'Risepoint', vertical: 'Higher ed (fmr Acad. Partners)', icpFit: 'N' },
   { id: 'pali-adventures', name: 'Pali Adventures', vertical: 'Youth / camp', icpFit: 'N' },
   { id: 'veep', name: 'Veep', vertical: 'Fintech', icpFit: 'Y' },
+  { id: 'carafem', name: 'Carafem', vertical: 'Healthcare (reproductive)', icpFit: 'Y' },
   { id: 'searchtides', name: 'SearchTides', vertical: 'Internal — SearchTides own AI visibility / SEO', icpFit: 'Y' },
 ] as const;
 
@@ -153,17 +154,26 @@ export interface ClientMetadata {
 
 // Populate as data becomes available. Clients not in this map surface
 // their metadata as "—" in the Clients tab.
+// monthlyValue source: Drew's Avg Monthly Revenue table (2026-04-24).
+// FanDuel: table shows FanDuel Inc at $348,842 total. Split 50/50 between
+// sportsbook and casino here because the two are tracked as one contract
+// on Drew's side — adjust the split if a more accurate allocation emerges.
 export const CLIENT_METADATA: Partial<Record<ClientId, ClientMetadata>> = {
-  // Example (replace with real values):
-  // 'creditninja': {
-  //   contractStart: '2024-01-15',
-  //   monthlyValue: 25000,
-  //   lastQBR: '2026-01-20',
-  //   nextQBR: '2026-04-20',
-  //   pointOfContact: { name: 'Patrick Shipman', email: 'patrick@creditninja.com' },
-  //   accountLead: 'Derek Iwasiuk',
-  //   contractStatus: 'active',
-  // },
+  'fanduel-sportsbook': { monthlyValue: 174421 },
+  'fanduel-casino': { monthlyValue: 174421 },
+  'creditninja': { monthlyValue: 76050 },
+  'greenvelope': { monthlyValue: 18700, nextQBR: '2026-05-04' },
+  'incode': { monthlyValue: 12142.86 },
+  'cd-valet': { monthlyValue: 9285 },
+  'melin': { monthlyValue: 8571 },
+  'klass-wagen': { monthlyValue: 8333, nextQBR: '2026-05-08' },
+  'risepoint': { monthlyValue: 6750 },
+  'carafem': { monthlyValue: 6000 },
+  'ninjacard': { monthlyValue: 2765 },
+  'veep': { monthlyValue: 2500 },
+  // Missing MRR (Capacity Fit will stay unscored for these):
+  //   pali-adventures — seasonal; MRR not yet provided
+  //   edge, mighty-capital, searchtides — unmapped to Harvest (see CLIENT_HARVEST_PROJECT)
 };
 
 // Fathom team names whose meetings feed the scorecard. These are the exact
@@ -306,4 +316,113 @@ export const CLIENT_PROFOUND_ASSET: Partial<Record<ClientId, ProfoundAssetMappin
     categoryId: '9ff0dd8c-c312-43ee-8dfb-9a36ffe344b5',
     categoryName: 'Online Sports Betting',
   },
+  // SearchTides tracks its own AI visibility as a self-client. Per the
+  // "SearchTides = AI visibility only" feedback rule, the searchtides tile
+  // is Profound-sourced only; Fathom content about internal ops is filtered
+  // out in manifest.ts.
+  'searchtides': {
+    assetId: 'dd6a52b5-9b44-4fe9-8622-6246411a9341',
+    assetName: 'SearchTides',
+    assetWebsite: 'searchtides.com',
+    categoryId: '5a294057-b717-4364-a9a4-9586039ba8be',
+    categoryName: 'Marketing',
+  },
 };
+
+// Harvest project IDs per SearchTides client. Harvest layout: the Harvest
+// *Client* named "SearchTides Clients" contains one *Project* per
+// SearchTides client (hours are logged against that project's tasks —
+// tasks are work-categories like "Research", "Reporting", etc., not per-
+// client). Unmapped clients are skipped by harvest-sync.
+// projectName is stored for debugging — only projectId is used for matching.
+// Source: GET /v2/projects?is_active=true on 2026-04-24.
+export interface HarvestProjectMapping {
+  projectId: number;
+  projectName: string;
+}
+
+// Harvest users whose hours feed Capacity Fit scoring (strategy + account
+// team). Everyone else — link-building team, ops, admin — is excluded so
+// the hours-per-$1k-MRR signal reflects strategic time only.
+// Names must match the full_name (`first_name + ' ' + last_name`) that
+// Harvest returns on time entries. Casey's name uses a curly apostrophe.
+// Source: Drew 2026-04-24.
+export const CAPACITY_COUNTED_USERS: readonly string[] = [
+  "Casey O’Connor",
+  'Sofia Volynets',
+  'Baldwin Diep',
+  'Nicholas Bradman',
+  'Chris Wyatt',
+  'Ricardo Bravo',
+  'Madeline Schwappach',
+  'Alex Giatrakas',
+  'Scott Moses',
+];
+
+export const CLIENT_HARVEST_PROJECT: Partial<Record<ClientId, HarvestProjectMapping>> = {
+  'fanduel-sportsbook': { projectId: 26892765, projectName: 'FanDuel Sportsbook' },
+  'fanduel-casino': { projectId: 32390961, projectName: 'FanDuel Casino' },
+  'creditninja': { projectId: 26892764, projectName: 'CreditNinja' },
+  'ninjacard': { projectId: 29535013, projectName: 'NinjaCard' },
+  'cd-valet': { projectId: 46198042, projectName: 'CD Valet' },
+  'incode': { projectId: 47232176, projectName: 'InCode' },
+  'greenvelope': { projectId: 47504752, projectName: 'Greenvelope' },
+  'melin': { projectId: 46287737, projectName: 'Melin' },
+  'klass-wagen': { projectId: 47605364, projectName: 'Klass Wagon' },
+  'risepoint': { projectId: 35864555, projectName: 'Risepoint' },
+  'pali-adventures': { projectId: 45117734, projectName: 'Pali Adventures' },
+  'veep': { projectId: 47630675, projectName: 'VeepSoftware' },
+  'carafem': { projectId: 46223819, projectName: 'Carafem' },
+  // Unmapped:
+  //   edge — intentional: Ninja Holdings offshoot, hours fold into
+  //          NinjaCard/CreditNinja until a dedicated project exists
+  //   mighty-capital — no Harvest project exists yet (should be created)
+  //   searchtides — intentionally excluded per "SearchTides = AI visibility only" rule
+};
+
+// Known client contacts — used by the rollup to override LLM attribution
+// when a narrative item mentions a contact's first name. Add entries as
+// real contacts appear. Ambiguous first names should be disambiguated with
+// a last name so the matcher requires both.
+export interface ClientContact {
+  firstName: string; // required for matching
+  lastName?: string; // optional — add when first name is ambiguous across clients
+  role?: string;
+  email?: string;
+}
+
+export const CLIENT_CONTACTS: Partial<Record<ClientId, readonly ClientContact[]>> = {
+  'greenvelope': [{ firstName: 'Sam', role: 'POC' }],
+  'creditninja': [{ firstName: 'Patrick', lastName: 'Shipman', role: 'POC' }],
+  // Populate as contacts become known. Last names are preferred when
+  // first names might collide (e.g. multiple "Chris" across clients).
+};
+
+// Fathom transcribes certain names inconsistently. Corrections are applied
+// to narrative-item text before client attribution and before the tweet
+// prompt, so the LLM sees the right spelling and contact-matching works.
+// Keys are matched case-insensitively against whole words.
+export const TRANSCRIPT_NAME_FIXES: Record<string, string> = {
+  mossy: 'Massi',
+  massy: 'Massi',
+};
+
+// Phrases that indicate SearchTides' own business state, which must never
+// appear in any client tile. Matched case-insensitively against item text.
+// Items where any phrase appears are dropped from the rollup.
+export const SEARCHTIDES_BUSINESS_BLOCKLIST: readonly string[] = [
+  'break-even',
+  'breakeven',
+  'searchtides revenue',
+  "searchtides' revenue",
+  'searchtides hiring',
+  "searchtides' hiring",
+  'searchtides finance',
+  "searchtides' finance",
+  'searchtides near',
+  'push searchtides',
+  "searchtides' best",
+  'searchtides will have its best',
+  'highest-revenue year',
+  'searchtides projections',
+];

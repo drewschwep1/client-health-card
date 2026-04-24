@@ -5,8 +5,9 @@ import { startOfWeek, format, subWeeks } from 'date-fns';
 import { CLIENTS, DIMENSIONS, type ClientId, type DimensionId } from './constants';
 import { getClientSignals, type ClientSignals } from './fathom/rollup';
 import { getProfoundSignal, type ProfoundClientSignal } from './profound/rollup';
+import { getHarvestSignal, type HarvestClientSignal } from './harvest/rollup';
 import { FATHOM_SCORABLE_DIMENSIONS } from './fathom/extract-types';
-import { generateWeekInATweet } from './tweet';
+import { generateWeekSummary, type WeekSummary } from './tweet';
 
 const PUBLIC_MANIFEST = path.join(process.cwd(), 'public', 'data', 'fathom', 'signals.json');
 
@@ -19,6 +20,11 @@ function weekIso(date: Date): string {
 // pending until a time-tracking source is wired.
 export type HealthCardEntry = Omit<ClientSignals, 'coveredDimensions' | 'partialHealth'> & {
   profound: ProfoundClientSignal | null;
+  // Harvest weekly hours per client. Informational only in this pass —
+  // does NOT contribute to partialHealth until MRR (CLIENT_METADATA.monthlyValue)
+  // is populated and the Capacity Fit scoring is flipped on in
+  // computeCombinedHealth below.
+  harvest: HarvestClientSignal | null;
   // Unified per-dimension score table merging all sources. null for
   // dimensions that are covered in principle but produced no score this
   // week; missing keys = dimension not covered by any wired data source.
@@ -27,20 +33,23 @@ export type HealthCardEntry = Omit<ClientSignals, 'coveredDimensions' | 'partial
   // Overrides the narrower Fathom-only fields of ClientSignals.
   coveredDimensions: DimensionId[];
   partialHealth: number | null;
-  // One-sentence AI-generated summary of the week. null when there's no
-  // signal to summarize or Anthropic isn't configured.
-  weekInATweet: string | null;
+  // AI-generated weekly summary: one-sentence tweet + one top win + one
+  // top risk. Each field null when data doesn't support it. Whole object
+  // null when no signal to summarize or Anthropic isn't configured.
+  weekSummary: WeekSummary | null;
 };
 
 function dimWeight(id: DimensionId): number {
   return DIMENSIONS.find(d => d.id === id)?.weight ?? 0;
 }
 
-// Merges Fathom's per-dim scores with Profound's Results Delivered score,
-// normalizes weights across covered dimensions, and returns a 0-100 health.
+// Merges Fathom's per-dim scores with Profound (Results Delivered) and
+// Harvest (Capacity Fit, portfolio-relative), normalizes weights across
+// covered dimensions, and returns a 0-100 health.
 function computeCombinedHealth(
   fathom: ClientSignals,
-  profound: ProfoundClientSignal | null
+  profound: ProfoundClientSignal | null,
+  capacityScore: number | null
 ): { coveredDimensions: DimensionId[]; partialHealth: number | null } {
   const perDim: Partial<Record<DimensionId, number>> = {};
   for (const d of FATHOM_SCORABLE_DIMENSIONS) {
@@ -49,6 +58,9 @@ function computeCombinedHealth(
   }
   if (profound?.rubricScore !== null && profound?.rubricScore !== undefined) {
     perDim['results-delivered'] = profound.rubricScore;
+  }
+  if (capacityScore !== null) {
+    perDim['capacity-fit'] = capacityScore;
   }
 
   const covered = Object.keys(perDim) as DimensionId[];
@@ -67,6 +79,23 @@ function computeCombinedHealth(
   };
 }
 
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+// Bands mirror the Capacity Fit rubric in constants.ts:78–84. `ratio` is
+// client's hours-per-$1k-MRR divided by the portfolio median for the week.
+// Lower ratio = more efficient = higher score.
+function scoreCapacity(ratio: number): number {
+  if (ratio >= 2.0) return 1;
+  if (ratio > 1.2) return 2;
+  if (ratio >= 0.8) return 3;
+  if (ratio >= 0.7) return 4;
+  return 5;
+}
+
 // Rolls up the last 8 weeks per client across all sources. Written to
 // public/data/fathom/signals.json for the static-exported Next.js app.
 export async function writeManifest(opts: {
@@ -81,44 +110,118 @@ export async function writeManifest(opts: {
     clients: {},
   };
 
-  for (const c of CLIENTS) {
-    const perWeek: Record<string, HealthCardEntry> = {};
-    for (const week of weeks) {
-      const fathom = await getClientSignals(c.id as ClientId, week, {
-        excludeRecordingIds: opts.excludeRecordingIds,
-      });
-      const profound = await getProfoundSignal(c.id as ClientId, week);
+  // Pass 1: gather raw signals for every (client, week). We need a second
+  // pass to assign Capacity Fit scores, which are portfolio-relative.
+  interface Staged {
+    clientId: ClientId;
+    week: string;
+    fathom: ClientSignals;
+    profound: ProfoundClientSignal | null;
+    harvest: HarvestClientSignal | null;
+  }
+  const staged: Staged[] = [];
 
-      const hasAnyData = fathom.meetingCount > 0 || profound !== null;
+  for (const c of CLIENTS) {
+    for (const week of weeks) {
+      // SearchTides on the health card = self-tracked AI visibility only.
+      // Internal business Fathom content (team ops, HR, finance, internal
+      // dashboards) must never surface on its tile, so we skip the Fathom
+      // rollup entirely for this client and lean on Profound alone.
+      const fathomRaw =
+        c.id === 'searchtides'
+          ? null
+          : await getClientSignals(c.id as ClientId, week, {
+              excludeRecordingIds: opts.excludeRecordingIds,
+            });
+      const fathom =
+        fathomRaw ??
+        ({
+          clientId: c.id as ClientId,
+          weekStart: week,
+          meetingCount: 0,
+          meetings: [],
+          weeklyWins: [],
+          concerns: [],
+          proactivitySignals: [],
+          suggestedScores: {
+            'client-happiness': null,
+            'execution-discipline': null,
+            'internal-momentum': null,
+          },
+          partialHealth: null,
+          coveredDimensions: [],
+          rawEvidence: [],
+          suggestedHappinessScore: null,
+        } satisfies ClientSignals);
+      const profound = await getProfoundSignal(c.id as ClientId, week);
+      const harvest = await getHarvestSignal(c.id as ClientId, week);
+
+      const hasAnyData = fathom.meetingCount > 0 || profound !== null || harvest !== null;
       if (!hasAnyData) continue;
 
-      const combined = computeCombinedHealth(fathom, profound);
-      const { coveredDimensions: _drop1, partialHealth: _drop2, ...fathomRest } = fathom;
-      const dimScores: Partial<Record<DimensionId, number | null>> = {
-        'client-happiness': fathom.suggestedScores['client-happiness'] ?? null,
-        'execution-discipline': fathom.suggestedScores['execution-discipline'] ?? null,
-        'internal-momentum': fathom.suggestedScores['internal-momentum'] ?? null,
-        'results-delivered': profound?.rubricScore ?? null,
-      };
-
-      const weekInATweet = await generateWeekInATweet(
-        c.id as ClientId,
-        week,
-        fathom,
-        profound,
-        combined.partialHealth
-      );
-
-      perWeek[week] = {
-        ...fathomRest,
-        profound,
-        dimScores,
-        coveredDimensions: combined.coveredDimensions,
-        partialHealth: combined.partialHealth,
-        weekInATweet,
-      };
+      staged.push({ clientId: c.id as ClientId, week, fathom, profound, harvest });
     }
-    if (Object.keys(perWeek).length > 0) manifest.clients[c.id] = perWeek;
+  }
+
+  // Pass 2: per-week portfolio median of hours-per-$1k-MRR. Only clients
+  // with both MRR and non-zero hours participate — zero-hour weeks would
+  // make the median misleading. Require at least 3 clients with data to
+  // compute a median; otherwise capacity stays unscored (not enough signal).
+  const weekMedians = new Map<string, number | null>();
+  for (const week of weeks) {
+    const ratios: number[] = [];
+    for (const s of staged) {
+      if (s.week !== week) continue;
+      const r = s.harvest?.hoursPerThousandMrr;
+      if (typeof r === 'number') ratios.push(r);
+    }
+    weekMedians.set(week, ratios.length >= 3 ? median(ratios) : null);
+  }
+
+  // Assign Capacity Fit rubric scores on each staged signal. Mutate the
+  // harvest object in place so the persisted entry carries it.
+  for (const s of staged) {
+    if (!s.harvest) continue;
+    const hPer1k = s.harvest.hoursPerThousandMrr;
+    const med = weekMedians.get(s.week) ?? null;
+    s.harvest.rubricScore =
+      hPer1k !== null && med !== null && med > 0 ? scoreCapacity(hPer1k / med) : null;
+  }
+
+  // Pass 3: assemble entries with combined health + week summaries.
+  for (const s of staged) {
+    const { clientId, week, fathom, profound, harvest } = s;
+    const capacityScore = harvest?.rubricScore ?? null;
+    const combined = computeCombinedHealth(fathom, profound, capacityScore);
+    const { coveredDimensions: _drop1, partialHealth: _drop2, ...fathomRest } = fathom;
+    const dimScores: Partial<Record<DimensionId, number | null>> = {
+      'client-happiness': fathom.suggestedScores['client-happiness'] ?? null,
+      'execution-discipline': fathom.suggestedScores['execution-discipline'] ?? null,
+      'internal-momentum': fathom.suggestedScores['internal-momentum'] ?? null,
+      'results-delivered': profound?.rubricScore ?? null,
+      'capacity-fit': capacityScore,
+    };
+
+    const weekSummary = await generateWeekSummary(
+      clientId,
+      week,
+      fathom,
+      profound,
+      combined.partialHealth
+    );
+
+    const entry: HealthCardEntry = {
+      ...fathomRest,
+      profound,
+      harvest,
+      dimScores,
+      coveredDimensions: combined.coveredDimensions,
+      partialHealth: combined.partialHealth,
+      weekSummary,
+    };
+
+    const perWeek = manifest.clients[clientId] ?? (manifest.clients[clientId] = {});
+    perWeek[week] = entry;
   }
 
   await fs.mkdir(path.dirname(PUBLIC_MANIFEST), { recursive: true });

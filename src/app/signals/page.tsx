@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { CLIENTS } from '@/lib/constants';
-import type { ClientSignals } from '@/lib/fathom/rollup';
+import type { HealthCardEntry } from '@/lib/manifest';
+import { assetPath } from '@/lib/paths';
 
 interface Manifest {
   generatedAt: string;
-  clients: Record<string, Record<string, ClientSignals>>;
+  clients: Record<string, Record<string, HealthCardEntry>>;
 }
 
 export default function SignalsPage() {
@@ -15,7 +16,7 @@ export default function SignalsPage() {
   const [expanded, setExpanded] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/client-health-card/data/fathom/signals.json')
+    fetch(assetPath('/data/fathom/signals.json'))
       .then(r => (r.ok ? r.json() : null))
       .then(data => setManifest(data))
       .catch(() => setManifest(null))
@@ -98,6 +99,28 @@ export default function SignalsPage() {
                           <p className="text-xs font-medium text-muted uppercase tracking-wide mb-2">
                             Week of {wk} · {w.meetingCount} call{w.meetingCount === 1 ? '' : 's'}
                           </p>
+                          {w.weekSummary && (
+                            <div className="mb-3 p-3 rounded-lg bg-accent-light border border-accent/20 space-y-2">
+                              <div>
+                                <p className="text-[10px] uppercase tracking-wide text-accent font-semibold mb-1">
+                                  Week in a tweet
+                                </p>
+                                <p className="text-sm leading-relaxed">{w.weekSummary.tweet}</p>
+                              </div>
+                              {w.weekSummary.topWin && (
+                                <div className="flex gap-2 text-sm leading-relaxed">
+                                  <span className="text-green font-semibold shrink-0">Win</span>
+                                  <span>{w.weekSummary.topWin}</span>
+                                </div>
+                              )}
+                              {w.weekSummary.topRisk && (
+                                <div className="flex gap-2 text-sm leading-relaxed">
+                                  <span className="text-red font-semibold shrink-0">Risk</span>
+                                  <span>{w.weekSummary.topRisk}</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
                           <ul className="text-[11px] text-muted mb-3 space-y-0.5">
                             {w.meetings.map(m => (
                               <li key={m.recordingId}>

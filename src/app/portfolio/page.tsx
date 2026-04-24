@@ -13,6 +13,7 @@ import {
   type HealthStatus,
 } from '@/lib/constants';
 import type { HealthCardEntry } from '@/lib/manifest';
+import { assetPath } from '@/lib/paths';
 
 interface Manifest {
   generatedAt: string;
@@ -33,7 +34,7 @@ export default function PortfolioPage() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    fetch('/client-health-card/data/fathom/signals.json')
+    fetch(assetPath('/data/fathom/signals.json'))
       .then(r => (r.ok ? r.json() : null))
       .then(d => setManifest(d))
       .catch(() => setManifest(null))

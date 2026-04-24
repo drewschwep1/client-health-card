@@ -30,7 +30,9 @@ const DIM_SHORT: Record<DimensionId, string> = {
   'internal-momentum': 'Momentum',
 };
 
-const PENDING_DIMS: readonly DimensionId[] = ['capacity-fit'] as const;
+// Empty — every dimension now has a wired data source. Clients without a
+// score for a given dim render as "—" via the null-handling below.
+const PENDING_DIMS: readonly DimensionId[] = [] as const;
 
 // 1-5 score → color band. Matches the rubric's narrative: 1-2 = bad (red),
 // 3 = neutral (yellow), 4-5 = strong (green). The 2-tone split on either
@@ -112,12 +114,30 @@ export function HealthTile({ client, current, prior }: Props) {
             <ProfoundCallout current={current} />
           )}
 
-          {current.weekInATweet ? (
-            <div className="mt-3 pt-2 border-t border-border/60">
-              <p className="text-[10px] uppercase tracking-wide text-muted mb-1">
-                Week in a tweet
-              </p>
-              <p className="text-xs leading-relaxed">{current.weekInATweet}</p>
+          {current.harvest && current.harvest.hoursThisWeek > 0 && (
+            <HarvestCallout current={current} />
+          )}
+
+          {current.weekSummary ? (
+            <div className="mt-3 pt-2 border-t border-border/60 space-y-2">
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-muted mb-1">
+                  Week in a tweet
+                </p>
+                <p className="text-xs leading-relaxed">{current.weekSummary.tweet}</p>
+              </div>
+              {current.weekSummary.topWin && (
+                <div className="flex gap-2 text-xs leading-relaxed">
+                  <span className="text-green font-semibold shrink-0">Win</span>
+                  <span>{current.weekSummary.topWin}</span>
+                </div>
+              )}
+              {current.weekSummary.topRisk && (
+                <div className="flex gap-2 text-xs leading-relaxed">
+                  <span className="text-red font-semibold shrink-0">Risk</span>
+                  <span>{current.weekSummary.topRisk}</span>
+                </div>
+              )}
             </div>
           ) : (
             topWin && (
@@ -197,6 +217,32 @@ function ScoreScale({ score, pending }: { score: number | null; pending: boolean
           }`}
         />
       ))}
+    </div>
+  );
+}
+
+function HarvestCallout({ current }: { current: HealthCardEntry }) {
+  const h = current.harvest;
+  if (!h) return null;
+  const hours = h.hoursThisWeek.toFixed(1);
+  const rawTotal = h.snapshot?.totalHours;
+  const wow = h.hoursWowDelta;
+  const wowLabel =
+    wow === null || Math.abs(wow) < 0.05
+      ? null
+      : `${wow > 0 ? '+' : ''}${wow.toFixed(1)}h vs prior`;
+  return (
+    <div className="mt-2 pt-2 border-t border-border/60">
+      <p
+        className="text-[11px] text-muted"
+        title="Strategy/account team only (excludes link-building team)"
+      >
+        Strategy hours: <span className="text-foreground font-medium">{hours}h</span>
+        {wowLabel && <span className="ml-2">({wowLabel})</span>}
+        {typeof rawTotal === 'number' && rawTotal > h.hoursThisWeek && (
+          <span className="ml-2 text-[10px]">of {rawTotal.toFixed(1)}h total</span>
+        )}
+      </p>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { CLIENTS } from '@/lib/constants';
 import type { HealthCardEntry } from '@/lib/manifest';
 import { HealthTile } from '@/components/health-tile';
 import { StatusLegend } from '@/components/status-legend';
+import { assetPath } from '@/lib/paths';
 
 interface Manifest {
   generatedAt: string;
@@ -17,7 +18,7 @@ export default function Dashboard() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    fetch('/client-health-card/data/fathom/signals.json')
+    fetch(assetPath('/data/fathom/signals.json'))
       .then(r => (r.ok ? r.json() : null))
       .then(data => setManifest(data))
       .catch(() => setManifest(null))
@@ -104,7 +105,7 @@ export default function Dashboard() {
           </p>
         </div>
         <span className="text-xs text-muted font-mono">
-          Fathom + Profound · Capacity Fit pending
+          Fathom + Profound + Harvest
         </span>
       </div>
 
@@ -117,10 +118,10 @@ export default function Dashboard() {
       </div>
 
       <p className="text-[11px] text-muted mt-8 max-w-2xl">
-        Partial health uses 4 automated dimensions: Client Happiness, Execution Discipline, and
-        Internal Momentum (Fathom transcripts), plus Results Delivered (Profound: share of voice,
-        citation share, visibility, sentiment). Weights are renormalized across covered
-        dimensions. Capacity Fit (needs time-tracking + MRR) is still pending.
+        Partial health uses all 5 dimensions: Client Happiness, Execution Discipline, and Internal
+        Momentum (Fathom transcripts), Results Delivered (Profound: share of voice, citation share,
+        visibility, sentiment), and Capacity Fit (Harvest hours per $1k MRR vs portfolio median).
+        Weights are renormalized across whichever dimensions have data that week.
       </p>
     </div>
   );
