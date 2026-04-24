@@ -1,0 +1,61 @@
+name: Refresh manifest and deploy to Vercel
+
+on:
+  schedule:
+    # Daily at 12:00 UTC (~8am ET). Syncs run serially and take a few
+    # minutes total — the fathom extraction step is the longest.
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: vercel-refresh
+  cancel-in-progress: false
+
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Write .env.local from secrets
+        run: |
+          cat > .env.local <<EOF
+          FATHOM_API_KEY=${{ secrets.FATHOM_API_KEY }}
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          PROFOUND_API_KEY=${{ secrets.PROFOUND_API_KEY }}
+          HARVEST_ACCESS_TOKEN=${{ secrets.HARVEST_ACCESS_TOKEN }}
+          HARVEST_ACCOUNT_ID=${{ secrets.HARVEST_ACCOUNT_ID }}
+          EOF
+
+      - name: Harvest sync
+        run: npm run harvest:sync
+
+      - name: Profound sync
+        run: npm run profound:sync
+
+      - name: Fathom sync (ingest + extract + manifest)
+        run: npm run fathom:sync
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel production settings
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build production artifact
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy prebuilt to production
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
