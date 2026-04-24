@@ -2,9 +2,9 @@ name: Refresh manifest and deploy to Vercel
 
 on:
   schedule:
-    # Daily at 12:00 UTC (~8am ET). Syncs run serially and take a few
-    # minutes total — the fathom extraction step is the longest.
-    - cron: '0 12 * * *'
+    # Weekdays at 12:00 UTC (~8am ET), Mon-Fri. Syncs run serially and
+    # take a few minutes total — the fathom extraction step is the longest.
+    - cron: '0 12 * * 1-5'
   workflow_dispatch:
 
 concurrency:
